@@ -81,13 +81,13 @@ if [ -f "${PID_FILE}" ]; then
   rm -f "${PID_FILE}"
 fi
 
-PIDS_DAEMON="$(ps | grep '[a]irplay-daemon.sh' | awk '{print $1}' || true)"
+PIDS_DAEMON="$(ps -w | grep '[a]irplay-daemon.sh' | awk '{print $1}' || true)"
 stop_pids "${PIDS_DAEMON}"
 
-PIDS_AP="$(ps | grep '[s]hairport-sync' | awk '{print $1}' || true)"
+PIDS_AP="$(ps -w | grep '[s]hairport-sync' | awk '{print $1}' || true)"
 stop_pids "${PIDS_AP}"
 
-PIDS_APLAY="$(ps | grep '[a]play -q -D notify' | awk '{print $1}' || true)"
+PIDS_APLAY="$(ps -w | grep '[a]play -q -D notify' | awk '{print $1}' || true)"
 stop_pids "${PIDS_APLAY}"
 
 # Ensure mipns-xiaomi is never left paused
@@ -130,6 +130,18 @@ MAX_LOG_BYTES=262144
 
 STOPPING=0
 CHILD_PID=""
+SLEEP_PID=""
+
+for fd_path in /proc/$$/fd/*; do
+  fd="${fd_path##*/}"
+  case "${fd}" in
+    0|1|2|'*') continue ;;
+  esac
+  target="$(readlink "${fd_path}" 2>/dev/null || true)"
+  case "${target}" in
+    pipe:*) eval "exec ${fd}>&-" 2>/dev/null || true ;;
+  esac
+done
 
 echo $$ > "${PID_FILE}"
 
@@ -170,6 +182,10 @@ stop_child() {
 
 cleanup() {
   STOPPING=1
+  if [ -n "${SLEEP_PID}" ]; then
+    kill "${SLEEP_PID}" >/dev/null 2>&1 || true
+    SLEEP_PID=""
+  fi
   stop_child
   "${AIRPLAY_HOOK}" stop >/dev/null 2>&1 || true
   rm -f "${PID_FILE}"
@@ -189,7 +205,10 @@ while [ "${STOPPING}" -eq 0 ]; do
   CHILD_PID=$!
 
   while [ "${STOPPING}" -eq 0 ] && kill -0 "${CHILD_PID}" 2>/dev/null; do
-    sleep 5
+    sleep 5 &
+    SLEEP_PID=$!
+    wait "${SLEEP_PID}" 2>/dev/null || true
+    SLEEP_PID=""
     [ "${STOPPING}" -eq 0 ] || break
     CUR_IP="$(get_wlan_ip)"
     CUR_MDNS="$(get_mdns_pid)"
@@ -207,22 +226,26 @@ while [ "${STOPPING}" -eq 0 ]; do
   CHILD_PID=""
   "${AIRPLAY_HOOK}" stop >/dev/null 2>&1 || true
 
-  [ "${STOPPING}" -eq 0 ] && sleep 2
+  if [ "${STOPPING}" -eq 0 ]; then
+    sleep 2 &
+    SLEEP_PID=$!
+    wait "${SLEEP_PID}" 2>/dev/null || true
+    SLEEP_PID=""
+  fi
 done
 DAEMON
 
 echo "Starting AirPlay 1 service..."
-(
-  for fd in 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    eval "exec ${fd}>&-" 2>/dev/null || true
-  done
-  exec "${AIRPLAY_DAEMON}" </dev/null >/dev/null 2>&1
-) &
+if command -v start-stop-daemon >/dev/null 2>&1; then
+  start-stop-daemon -S -b -p "${PID_FILE}" -x "${AIRPLAY_DAEMON}"
+else
+  ( "${AIRPLAY_DAEMON}" </dev/null >/dev/null 2>&1 ) &
+fi
 
 started=0
 i=0
 while [ "${i}" -lt 5 ]; do
-  if ps | grep -q '[s]hairport-sync'; then
+  if ps -w | grep -q '[s]hairport-sync'; then
     started=1
     break
   fi

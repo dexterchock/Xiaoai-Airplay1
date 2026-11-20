@@ -56,6 +56,7 @@ RUN set -eu; \
       --disable-ucm \
       --disable-topology \
       --disable-alisp \
+      --without-versioned \
       CFLAGS="${OPT_FLAGS}" \
       LDFLAGS="--sysroot=${SYSROOT}"; \
     make -j"$(nproc)"; \
