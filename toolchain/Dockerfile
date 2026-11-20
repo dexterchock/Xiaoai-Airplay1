@@ -151,13 +151,12 @@ RUN set -eu; \
     echo "67ebca7e50d17383028045486653492195b83db95f8558709701bb47b5c1ef81  openssl.tar.gz" | sha256sum -c -; \
     tar -xzf openssl.tar.gz; \
     cd openssl-3.0.22; \
-    ./Configure linux-armv4 \
+    CFLAGS="${OPT_FLAGS}" ./Configure linux-armv4 \
       --cross-compile-prefix="${CROSS_PREFIX}" \
       --prefix=/usr \
       --libdir=lib \
-      no-shared no-apps no-docs no-tests no-dso no-engine no-legacy \
-      no-dtls no-ssl3 no-tls1 no-tls1_1 no-comp \
-      ${OPT_FLAGS}; \
+      no-shared no-tests no-dso no-engine no-legacy \
+      no-dtls no-ssl3 no-tls1 no-tls1_1 no-comp; \
     make -j"$(nproc)" build_libs; \
     make DESTDIR="${SYSROOT}" install_dev; \
     rm -rf /tmp/deps
