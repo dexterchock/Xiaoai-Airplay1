@@ -1,6 +1,6 @@
 ![AirPlay for XiaoAi OH2P](assets/banner.png)
 
-# xiaoai airplay1
+# Xiaoai Airplay1
 
 AirPlay 1 receiver (`shairport-sync` 5.6.3) built for the Xiaomi Smart Speaker Pro (`OH2P`).
 
