@@ -6,8 +6,6 @@ on:
       - main
     paths:
       - toolchain/**
-      - install.sh
-      - boot.sh
       - shairport-sync.conf
       - .github/workflows/release.yml
   workflow_dispatch:
@@ -20,7 +18,7 @@ env:
 
 concurrency:
   group: release-latest
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
@@ -31,13 +29,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache shairport-sync static build outputs
+      - name: Cache shairport-sync build output
         uses: actions/cache@v4
         with:
           path: |
-            build/shairport-sync-src
             build/shairport-sync
-          key: shairport-soxr-v2-${{ runner.os }}-${{ hashFiles('toolchain/build-shairport.sh', 'toolchain/Dockerfile') }}
+            build/.build-stamp
+          key: shairport-5.6.3-alsa-v1-${{ runner.os }}-${{ hashFiles('toolchain/build-shairport.sh', 'toolchain/Dockerfile') }}
 
       - name: Build and package release archive
         run: make -C toolchain package

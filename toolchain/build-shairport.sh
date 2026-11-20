@@ -2,19 +2,29 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE_NAME="xiaoai-airplay1-toolchain:dev"
-SHAIRPORT_VERSION="4.3.5"
+IMAGE_NAME="${IMAGE_NAME:-xiaoai-airplay1-toolchain:dev}"
+SHAIRPORT_VERSION="5.6.3"
 SHAIRPORT_SRC_DIR="${PROJECT_ROOT}/build/shairport-sync-src"
 OUTPUT_BIN="${PROJECT_ROOT}/build/shairport-sync"
+BUILD_STAMP="${PROJECT_ROOT}/build/.build-stamp"
 
-if [ -f "${OUTPUT_BIN}" ]; then
-  echo "==> Static shairport-sync already exists at ${OUTPUT_BIN}, skipping build."
+EXPECTED_STAMP="$(sha256sum "${PROJECT_ROOT}/toolchain/Dockerfile" "${PROJECT_ROOT}/toolchain/build-shairport.sh" | sha256sum | awk '{print $1}')"
+
+if [ "${FORCE_REBUILD:-0}" != "1" ] && [ -f "${OUTPUT_BIN}" ] && [ -f "${BUILD_STAMP}" ] && [ "$(cat "${BUILD_STAMP}")" = "${EXPECTED_STAMP}" ]; then
+  echo "==> Up-to-date shairport-sync ${SHAIRPORT_VERSION} already exists at ${OUTPUT_BIN}, skipping build."
   exit 0
 fi
 
-make -C "${PROJECT_ROOT}/toolchain" build
+make -C "${PROJECT_ROOT}/toolchain" IMAGE_NAME="${IMAGE_NAME}" build
 
 mkdir -p "${PROJECT_ROOT}/build"
+
+if [ -d "${SHAIRPORT_SRC_DIR}" ]; then
+  CURRENT_TAG="$(git -C "${SHAIRPORT_SRC_DIR}" describe --tags --exact-match 2>/dev/null || true)"
+  if [ "${CURRENT_TAG}" != "${SHAIRPORT_VERSION}" ]; then
+    rm -rf "${SHAIRPORT_SRC_DIR}"
+  fi
+fi
 
 if [ ! -d "${SHAIRPORT_SRC_DIR}" ]; then
   echo "==> Cloning shairport-sync ${SHAIRPORT_VERSION}..."
@@ -22,73 +32,63 @@ if [ ! -d "${SHAIRPORT_SRC_DIR}" ]; then
     https://github.com/mikebrady/shairport-sync.git "${SHAIRPORT_SRC_DIR}"
 fi
 
-echo "==> Building static shairport-sync (with SoXR) for ARMv7 Cortex-A53..."
+echo "==> Building shairport-sync ${SHAIRPORT_VERSION} (ALSA + FFmpeg + SoXR + dns-sd) for OH2P..."
 docker run --rm -i \
+  -u "$(id -u):$(id -g)" \
+  -e HOME=/tmp \
   -v "${PROJECT_ROOT}":/workspace \
   -w /workspace/build/shairport-sync-src \
   "${IMAGE_NAME}" \
   bash << 'EOF'
 set -euo pipefail
+
 git config --global --add safe.directory "*"
 
-OPT_FLAGS="-O3 -march=armv7-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -ffast-math"
-
-# 1. Build static libsoxr.a
-if [ ! -f /usr/lib/arm-linux-gnueabihf/libsoxr.a ]; then
-  echo "==> Building static libsoxr.a for ARMv7..."
-  mkdir -p /tmp/soxr
-  cd /tmp/soxr
-  if curl -fsSL "http://archive.ubuntu.com/ubuntu/pool/universe/libs/libsoxr/libsoxr_0.1.3.orig.tar.xz" -o soxr.tar.xz; then
-    tar -xJf soxr.tar.xz --strip-components=1
-  else
-    git clone --depth 1 https://github.com/chirlu/soxr.git .
-  fi
-  cmake -S . -B build \
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DCMAKE_SYSTEM_NAME=Linux \
-    -DCMAKE_SYSTEM_PROCESSOR=arm \
-    -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-    -DCMAKE_C_FLAGS="${OPT_FLAGS}" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DWITH_OPENMP=OFF \
-    -DWITH_CR32S=OFF \
-    -DWITH_CR64S=OFF \
-    -DWITH_AVFFT=OFF \
-    -DWITH_LSR_BINDINGS=OFF \
-    -DBUILD_TESTS=OFF \
-    -DBUILD_EXAMPLES=OFF
-  cmake --build build -j$(nproc)
-  cmake --install build
-  cp -a /usr/lib/libsoxr.a /usr/lib/arm-linux-gnueabihf/libsoxr.a
-  cp -a /usr/lib/pkgconfig/soxr.pc /usr/lib/arm-linux-gnueabihf/pkgconfig/soxr.pc 2>/dev/null || true
-  rm -rf /tmp/soxr
-fi
-
-# 2. Build static shairport-sync
-cd /workspace/build/shairport-sync-src
 autoreconf -fi
-export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
-export PKG_CONFIG_LIBDIR="/usr/lib/arm-linux-gnueabihf/pkgconfig:/usr/share/pkgconfig"
-export PKG_CONFIG_SYSROOT_DIR=""
+
+export PKG_CONFIG=/usr/local/bin/arm-pkg-config
 
 ./configure \
-  --host=arm-linux-gnueabihf \
-  --with-stdout \
-  --with-pipe \
-  --with-tinysvcmdns \
+  --host=arm-buildroot-linux-gnueabihf \
+  --sysconfdir=/data/xiaoai-airplay1 \
+  --with-alsa \
+  --with-dns_sd \
   --with-ssl=openssl \
-  --with-metadata \
+  --with-ffmpeg \
   --with-soxr \
   CFLAGS="${OPT_FLAGS}" \
-  LDFLAGS="-static -L/usr/lib/arm-linux-gnueabihf" \
-  LIBS="-lz -lm -lpthread -ldl"
+  LDFLAGS="-Wl,--as-needed -Wl,--gc-sections" \
+  LIBS="-lm -lpthread -lrt -ldl"
 
-make -j$(nproc)
-arm-linux-gnueabihf-strip shairport-sync
+make -j"$(nproc)"
+${CROSS_PREFIX}strip --strip-unneeded shairport-sync
+
+echo "==> Verifying ELF ABI compatibility for OH2P (armhf glibc <= 2.25)..."
+${CROSS_PREFIX}readelf -h shairport-sync | grep -q "ELF32"
+${CROSS_PREFIX}readelf -h shairport-sync | grep -q "Machine:.*ARM"
+
+NEEDED="$(${CROSS_PREFIX}readelf -d shairport-sync | awk '/\(NEEDED\)/ {gsub(/[\[\]]/, "", $5); print $5}')"
+echo "DT_NEEDED:"
+echo "${NEEDED}"
+ALLOWED_RE='^(libc\.so\.6|libm\.so\.6|libpthread\.so\.0|librt\.so\.1|libdl\.so\.2|libgcc_s\.so\.1|libasound\.so\.2|libdns_sd\.so|ld-linux-armhf\.so\.3)$'
+for lib in ${NEEDED}; do
+  if ! echo "${lib}" | grep -Eq "${ALLOWED_RE}"; then
+    echo "ERROR: disallowed shared library dependency: ${lib}" >&2
+    exit 1
+  fi
+done
+
+GLIBC_VERS="$(${CROSS_PREFIX}readelf -V shairport-sync | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -u || true)"
+echo "GLIBC symbol versions:"
+echo "${GLIBC_VERS}"
+if echo "${GLIBC_VERS}" | grep -Eq '^GLIBC_2\.(2[6-9]|[3-9][0-9])|^GLIBC_[3-9]\.'; then
+  echo "ERROR: binary requires GLIBC > 2.25 (incompatible with OH2P glibc 2.25)" >&2
+  exit 1
+fi
+
 cp shairport-sync /workspace/build/shairport-sync
 EOF
 
-echo "==> Static shairport-sync built successfully: ${OUTPUT_BIN}"
+echo "${EXPECTED_STAMP}" > "${BUILD_STAMP}"
+echo "==> Built shairport-sync ${SHAIRPORT_VERSION} successfully: ${OUTPUT_BIN}"
 ls -lh "${OUTPUT_BIN}"
