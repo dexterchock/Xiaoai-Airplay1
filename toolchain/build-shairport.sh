@@ -57,7 +57,7 @@ export PKG_CONFIG=/usr/local/bin/arm-pkg-config
   --with-ffmpeg \
   --with-soxr \
   CFLAGS="${OPT_FLAGS}" \
-  LDFLAGS="-Wl,--as-needed -Wl,--gc-sections" \
+  LDFLAGS="--sysroot=${SYSROOT} -Wl,--as-needed -Wl,--gc-sections" \
   LIBS="-lm -lpthread -lrt -ldl"
 
 make -j"$(nproc)"

@@ -12,9 +12,10 @@ RUN apt-get update \
 
 ENV TOOLCHAIN_DIR=/opt/toolchain
 ENV SYSROOT=/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot
-ENV PATH=/opt/toolchain/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/toolchain/bin
 ENV CROSS_PREFIX=arm-buildroot-linux-gnueabihf-
-ENV OPT_FLAGS="-O3 -march=armv7-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -ffunction-sections -fdata-sections"
+ENV OPT_FLAGS="-O3 -march=armv7-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -ffunction-sections -fdata-sections --sysroot=/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot"
+ENV SYSROOT_LDFLAGS="--sysroot=/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot"
 ENV PKG_CONFIG_SYSROOT_DIR=/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot
 ENV PKG_CONFIG_LIBDIR=/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot/usr/lib/pkgconfig:/opt/toolchain/arm-buildroot-linux-gnueabihf/sysroot/usr/share/pkgconfig
 ENV PKG_CONFIG_PATH=""
@@ -30,7 +31,9 @@ RUN set -eu; \
     curl -fsSL "https://toolchains.bootlin.com/downloads/releases/toolchains/armv7-eabihf/tarballs/armv7-eabihf--glibc--bleeding-edge-2017.05-toolchains-1-2.tar.bz2" -o toolchain.tar.bz2; \
     echo "fa4223e8fd7841898b122740da096aa5b496706c1d17378c379afabdffd9f2b3  toolchain.tar.bz2" | sha256sum -c -; \
     tar -xjf toolchain.tar.bz2 --strip-components=1 -C "${TOOLCHAIN_DIR}"; \
-    cd "${TOOLCHAIN_DIR}" && ./relocate-sdk.sh; \
+    if [ -x "${TOOLCHAIN_DIR}/relocate-sdk.sh" ]; then cd "${TOOLCHAIN_DIR}" && ./relocate-sdk.sh; fi; \
+    ${CROSS_PREFIX}gcc --version; \
+    ${CROSS_PREFIX}gcc -print-sysroot; \
     rm -rf /tmp/deps
 
 # 2. ALSA 1.1.5 headers + link-time libasound.so.2 (matches speaker /usr/lib/libasound.so.2.0.0)
@@ -53,8 +56,8 @@ RUN set -eu; \
       --disable-ucm \
       --disable-topology \
       --disable-alisp \
-      --disable-old-symbols \
-      CFLAGS="${OPT_FLAGS}"; \
+      CFLAGS="${OPT_FLAGS}" \
+      LDFLAGS="--sysroot=${SYSROOT}"; \
     make -j"$(nproc)"; \
     make DESTDIR="${SYSROOT}" install; \
     rm -f "${SYSROOT}"/usr/lib/*.la; \
@@ -71,7 +74,7 @@ RUN set -eu; \
       'DNSServiceErrorType DNSServiceUpdateRecord(DNSServiceRef sdRef, DNSRecordRef RecordRef, DNSServiceFlags flags, uint16_t rdlen, const void *rdata, uint32_t ttl) { (void)sdRef;(void)RecordRef;(void)flags;(void)rdlen;(void)rdata;(void)ttl; return 0; }' \
       'void DNSServiceRefDeallocate(DNSServiceRef sdRef) { (void)sdRef; }' \
       > dns_sd_stub.c; \
-    ${CROSS_PREFIX}gcc -shared -fPIC -Wl,-soname,libdns_sd.so -o "${SYSROOT}/usr/lib/libdns_sd.so" dns_sd_stub.c; \
+    ${CROSS_PREFIX}gcc --sysroot="${SYSROOT}" -shared -fPIC -Wl,-soname,libdns_sd.so -o "${SYSROOT}/usr/lib/libdns_sd.so" dns_sd_stub.c; \
     rm -rf /tmp/deps
 
 # 4. Static libsoxr 0.1.3
@@ -108,6 +111,7 @@ RUN set -eu; \
     echo "545166d6cac037744381d1e9cc5a5405094e7bfad16a411699bcff40bbb31ee7  libconfig.tar.gz" | sha256sum -c -; \
     tar -xzf libconfig.tar.gz; \
     cd libconfig-1.7.3; \
+    [ -x ./configure ] || autoreconf -fi; \
     ./configure \
       --host=arm-buildroot-linux-gnueabihf \
       --prefix=/usr \
@@ -117,7 +121,8 @@ RUN set -eu; \
       --disable-examples \
       --disable-tests \
       --disable-doc \
-      CFLAGS="${OPT_FLAGS}"; \
+      CFLAGS="${OPT_FLAGS}" \
+      LDFLAGS="--sysroot=${SYSROOT}"; \
     make -j"$(nproc)"; \
     make DESTDIR="${SYSROOT}" install; \
     cd /tmp/deps; \
@@ -125,13 +130,15 @@ RUN set -eu; \
     echo "4cd0cd2963d0c4078f65949599d97135c15ee6c09cf3a36a9a1b2753025bb06b  popt.tar.xz" | sha256sum -c -; \
     mkdir popt-src && tar -xJf popt.tar.xz --strip-components=1 -C popt-src; \
     cd popt-src; \
+    [ -x ./configure ] || autoreconf -fi; \
     ./configure \
       --host=arm-buildroot-linux-gnueabihf \
       --prefix=/usr \
       --enable-static \
       --disable-shared \
       --disable-nls \
-      CFLAGS="${OPT_FLAGS}"; \
+      CFLAGS="${OPT_FLAGS}" \
+      LDFLAGS="--sysroot=${SYSROOT}"; \
     make -j"$(nproc)"; \
     make DESTDIR="${SYSROOT}" install; \
     rm -f "${SYSROOT}"/usr/lib/*.la; \
@@ -171,6 +178,7 @@ RUN set -eu; \
       --enable-neon \
       --enable-vfp \
       --extra-cflags="${OPT_FLAGS}" \
+      --extra-ldflags="--sysroot=${SYSROOT}" \
       --prefix=/usr \
       --enable-static \
       --disable-shared \
